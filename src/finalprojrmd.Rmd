@@ -1,0 +1,570 @@
+---
+title: "Final Project Biol 4080"
+author: "Sammy Durbin"
+date: "2026-05-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(bio3d)
+library(stringr)
+library(igraph)
+library(rgl)
+```
+
+# Abstract
+
+# Introduction
+
+In the early 1900s, Hans Gerhard Creutzfeldt and Alfons Maria Jakob noted patients with a rapidly progressive and fatal neurological disease distinguished by dementia, motor dysfunction such as stiffness and involuntary jerking movements, loss of balance, and, on autopsy, spongy degeneration in the brain tissue.^1,2^ In his 1922 work, Walther Spielmeyer grouped the cases described by Creutzfeldt and Jakob as a single, distinct neurodegenerative disease entity^3^ introducing the designation later known as Creutzfeldt–Jakob disease (CJD). 
+
+The causative agent behind CJD was revealed as a proteinaceous infectious particle (prion) by Stanley Prusiner^4^ in 1982,  with key details on the neurotoxic aggregates provided by Byron Caughey and Peter Lansbury’s research, and mechanistic insights through Mari DeMarco and Valerie Dagget’s work, explaining how prions form toxic accumulations given enough time.^5,6^ Misfolded PRNP induces conformational changes in other PRNP neighbors, forming toxic oligomers that accumulate eventually forming large enough clumps to impede brain and nervous system function. This process is irreversible and always leads to death in those diagnosed with the disease.^7^ 
+
+PRNP is interesting as while there are several mutations that occur genetically, there is also a spontaneous arise of a fatal disease documented in patient populations.^8^ This paper aims to investigate the structural features of pathogenic genetic PRNP variants using biostatistical analysis of clinical and structural data to identify key regions of instability that, when mutated, lead to protein misfolding and disease.
+
+# Methods
+
+The crystal structure 1QLX of PRNP serves as a structural reference of the wild type PRNP.^9^ Cα coordinates were extracted and used to compute a pairwise distance matrix. A residue interaction network was constructed by defining edges between residues whose Cα atoms were within 8 Å - a commonly used threshold in protein contact and residue interaction network analyses^15. From this network, structural features were computed such as number of contacts per residue (degree) and betweenness centrality (how frequently a residue lies on the shortest paths between other residues)^11,15^
+
+For assessment of diseased PRNP, the ClinVar dataset was utilized. Containing 230 genetic mutations of PRNP, the dataset contained pathogenicity of the mutation, germline classification, variant type, and residue number.^10^ 
+ClinVar variants were mapped onto the 1QLX structure by residue number, allowing integration of structural features with mutation data. Residues were categorized into five structural regions (Helix 1, Helix 2, Helix 3, β2–α2 loop, or other).^12^
+
+Logistic regression models were constructed to evaluate the association between structural features and mutation pathogenicity. Multiple models were tested, including combinations of degree, betweenness centrality, and structural region, and compared using Akaike Information Criterion (AIC) to identify the model of best fit. Additionally, a Wilcoxon rank-sum test^13^ was used to compare residue contact degree between pathogenic and non-pathogenic variants, to assess if there is an association between degree and pathogenicity.
+
+# Code
+
+```{r}
+# -----------------------------
+# Load Libraries
+# -----------------------------
+
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(bio3d)
+library(stringr)
+library(igraph)
+library(rgl)
+
+# -----------------------------
+# Load Data
+# -----------------------------
+
+prnp_data <- read_tsv(
+  "clinvar_result.txt",
+  col_types = cols(.default = "c"),
+  na = c("", "NA")
+)
+
+# ------------------------------
+# isolate key columns
+# ------------------------------
+
+df_focus <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  select(
+    `Protein change`,
+    `Molecular consequence`,
+    `Variant type`,
+    `Germline classification`
+  )
+
+# ------------------------------
+# identify variant types and classifications
+# ------------------------------
+
+df_focus %>%
+  count(`Variant type`, `Germline classification`) %>%
+  ggplot(aes(x = `Variant type`, y = n, fill = `Germline classification`)) +
+  geom_col() +
+  theme_minimal() +
+  scale_fill_manual(values = c(
+    "Pathogenic" = "#d73027",
+    "Likely pathogenic" = "#fc8d59",
+    "Uncertain significance" = "#bdbdbd",
+    "Likely benign" = "#91bfdb",
+    "Benign" = "#4575b4"
+  )) +
+  labs(
+    x = "Variant type",
+    y = "Count",
+    fill = "Germline classification",
+    title = "Distribution of variant types"
+  )
+
+# ------------------------------
+# Residue level plot
+# ------------------------------
+
+df_path <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  filter(grepl("Pathogenic", `Germline classification`, ignore.case = TRUE))
+
+df_parsed <- df_path %>%
+  mutate(
+    wt_aa  = str_extract(`Protein change`, "^[A-Z]"),
+    mut_aa = str_extract(`Protein change`, "[A-Z]$"),
+    residue = as.integer(str_extract(`Protein change`, "[0-9]+"))
+  )
+
+df_counts <- df_parsed %>%
+  count(`Protein change`, wt_aa, mut_aa, residue, sort = TRUE)
+
+print(df_counts, n = 50)
+
+ggplot(df_counts, aes(x = residue, y = n)) +
+  geom_col(fill = "red") +
+  theme_bw() +
+  labs(
+    title = "Pathogenic PRNP Mutations by Residue",
+    x = "Residue position",
+    y = "Number of ClinVar submissions"
+  )
+
+# ------------------------------
+# Load 1QLX structure and build contact network
+# ------------------------------
+
+pdb <- read.cif("1qlx.cif")
+
+ca <- atom.select(pdb, elety = "CA")
+
+coords <- pdb$xyz[ca$xyz]
+coords_matrix <- matrix(coords, ncol = 3, byrow = TRUE)
+
+resno <- pdb$atom$resno[ca$atom]
+resid <- pdb$atom$resid[ca$atom]
+
+dist_matrix <- as.matrix(dist(coords_matrix))
+
+threshold <- 8
+contacts <- dist_matrix < threshold
+diag(contacts) <- FALSE
+
+g <- graph_from_adjacency_matrix(
+  contacts,
+  mode = "undirected",
+  diag = FALSE
+)
+
+# Compute structural network features
+btw <- betweenness(g, normalized = TRUE)
+deg <- degree(g)
+
+# ------------------------------
+# Distance map
+# ------------------------------
+
+heatmap(
+  dist_matrix,
+  Rowv = NA,
+  Colv = NA,
+  col = colorRampPalette(c("blue", "white", "red"))(100),
+  scale = "none",
+  xlab = "Residue Number",
+  ylab = "Residue Number",
+  main = "Distance Map"
+)
+
+# ------------------------------
+# Centrality stuff
+# ------------------------------
+
+centrality_df <- data.frame(
+  index = seq_along(btw),
+  resno = resno,
+  resid = resid,
+  betweenness = btw
+)
+
+centrality_df <- centrality_df[order(-centrality_df$betweenness), ]
+
+head(centrality_df, 20)
+
+# Top 10% most central residues
+cutoff <- quantile(btw, 0.90)
+
+high_cent <- btw >= cutoff
+
+high_cent_residues <- data.frame(
+  index = which(high_cent),
+  resno = resno[high_cent],
+  resid = resid[high_cent],
+  betweenness = btw[high_cent]
+)
+
+high_cent_residues
+
+V(g)$size <- 4
+V(g)$color <- ifelse(high_cent, "red", "gray")
+
+# Label only high-betweenness residues
+vertex_labels <- ifelse(
+  high_cent,
+  paste0(resid, resno),
+  NA
+)
+
+plot(
+  g,
+  vertex.label = vertex_labels,
+  vertex.label.cex = 0.7,
+  vertex.label.color = "black",
+  vertex.size = V(g)$size,
+  vertex.color = V(g)$color,
+  edge.color = "gray80",
+  main = "Contact Network: High-Betweenness Residues in Red"
+)
+
+# ------------------------------
+# 3D centrality visualization
+# ------------------------------
+
+open3d()
+
+# Plot all C-alpha atoms
+spheres3d(
+  coords_matrix,
+  radius = 0.6,
+  color = "gray"
+)
+
+# Plot high-centrality C-alpha atoms
+spheres3d(
+  coords_matrix[high_cent, ],
+  radius = 1.2,
+  color = "red"
+)
+
+# Draw backbone trace
+lines3d(coords_matrix, color = "black", lwd = 2)
+
+# Add residue labels for high-centrality residues
+text3d(
+  coords_matrix[high_cent, ],
+  texts = paste0(resid[high_cent], resno[high_cent]),
+  color = "red",
+  cex = 0.8
+)
+
+# ------------------------------
+# Permutation test for clustering near functional sites
+# ------------------------------
+
+# pick functional residues
+functional_resno <- c(
+  165:175,                  # β2–α2 loop
+  178, 200, 208, 210, 217,  # disease mutations
+  179, 214                  # disulfide bond
+)
+
+functional_idx <- which(resno %in% functional_resno)
+high_idx <- which(high_cent)
+
+# Minimum distance from each high-centrality residue to functional site
+obs_dist <- apply(dist_matrix[high_idx, functional_idx, drop = FALSE], 1, min)
+obs_mean <- mean(obs_dist)
+
+# Permutation test
+# “What would this distance look like if I picked random residues instead of high-centrality ones?”
+
+set.seed(123)
+
+n_perm <- 10000
+perm_means <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+  # picking random set of residues that is the same size as the high centrality set
+  random_idx <- sample(seq_along(resno), length(high_idx))
+  
+  # for each random residue, find the closest functional residue
+  random_dist <- apply(dist_matrix[random_idx, functional_idx, drop = FALSE], 1, min)
+  
+  # compute average distance for this random set
+  perm_means[i] <- mean(random_dist)
+}
+
+p_value <- mean(perm_means <= obs_mean)
+
+obs_mean
+p_value
+
+hist(
+  perm_means,
+  breaks = 50,
+  main = "Permutation Test: Clustering Near Functional Site",
+  xlab = "Mean Distance to Functional Site"
+)
+
+abline(v = obs_mean, col = "red", lwd = 3)
+
+if (p_value < 0.05) {
+  print("High-centrality residues are significantly clustered near the functional site.")
+} else {
+  print("No significant clustering near the functional site detected.")
+}
+
+# ------------------------------
+# Amino acid frequency comparison
+# ------------------------------
+
+# Extract amino acids
+aa_high <- resid[high_cent]
+aa_func <- resid[functional_idx]
+
+# Frequency tables
+freq_high <- table(aa_high)
+freq_func <- table(aa_func)
+
+# Convert to data frames
+df_high <- as.data.frame(freq_high)
+colnames(df_high) <- c("AminoAcid", "Count")
+df_high$Region <- "High Centrality"
+
+df_func <- as.data.frame(freq_func)
+colnames(df_func) <- c("AminoAcid", "Count")
+df_func$Region <- "Functional"
+
+# Combine
+df_all <- rbind(df_high, df_func)
+
+# Plot counts
+ggplot(df_all, aes(x = AminoAcid, y = Count, fill = Region)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c(
+    "High Centrality" = "red",
+    "Functional" = "darkgreen"
+  )) +
+  theme_minimal() +
+  labs(
+    title = "Amino Acid Frequency Comparison",
+    x = "Amino Acid",
+    y = "Count"
+  )
+
+# ------------------------------
+# Make structural table from 1QLX C-alpha atoms
+# ------------------------------
+
+pdb_map <- data.frame(
+  residue = resno,
+  pdb_residue_name = resid,
+  betweenness = btw,
+  degree = deg
+) %>%
+  mutate(region = case_when(
+    residue >= 144 & residue <= 154 ~ "Helix 1",
+    residue >= 165 & residue <= 172 ~ "β2–α2 loop",
+    residue >= 173 & residue <= 194 ~ "Helix 2",
+    residue >= 200 & residue <= 228 ~ "Helix 3",
+    TRUE ~ "Other"
+  ))
+
+# ------------------------------
+# Mapped table for pathogenic ClinVar PRNP protein changes
+# ------------------------------
+
+clinvar_pathogenic_map <- df_counts %>%
+  mutate(pathogenic = 1)
+
+mapped_mutations <- clinvar_pathogenic_map %>%
+  mutate(residue = as.numeric(residue)) %>%
+  filter(residue >= 125 & residue <= 228) %>%
+  left_join(pdb_map, by = "residue") %>%
+  arrange(residue) %>%
+  select(
+    `Protein change`,
+    residue,
+    betweenness,
+    degree,
+    region
+  )
+
+print(mapped_mutations, n = Inf)
+
+# ------------------------------
+# Mapped table for ALL ClinVar PRNP protein changes
+# pathogenic + non-pathogenic
+# ------------------------------
+
+clinvar_all_map <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  mutate(
+    residue = as.numeric(str_extract(`Protein change`, "[0-9]+")),
+    pathogenic = ifelse(
+      grepl("Pathogenic", `Germline classification`, ignore.case = TRUE),
+      1, 0
+    )
+  ) %>%
+  filter(residue >= 125 & residue <= 228)
+
+mapped_all_mutations <- clinvar_all_map %>%
+  left_join(pdb_map, by = "residue") %>%
+  arrange(residue) %>%
+  select(
+    `Protein change`,
+    residue,
+    `Germline classification`,
+    pathogenic,
+    betweenness,
+    degree,
+    region
+  )
+
+print(mapped_all_mutations, n = Inf)
+
+# -------------------------------
+# Pathogenic Mutations by region
+# -------------------------------
+
+ggplot(mapped_all_mutations, aes(x = region, fill = factor(pathogenic))) +
+  geom_bar(position = "fill") +
+  theme_bw() +
+  labs(
+    x = "Structural region",
+    y = "Proportion",
+    fill = "Pathogenic",
+    title = "Enrichment of Pathogenic Mutations by Structural Region"
+  )
+
+# ------------------------------
+# GLM section
+# ------------------------------
+
+df_model <- mapped_all_mutations %>%
+  mutate(
+    region = factor(region),
+    region = relevel(region, ref = "Other")
+  )
+
+# Model 1 (Full model)
+
+model_1 <- glm(
+  pathogenic ~ degree + betweenness + region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 2 (no region)
+
+model_2 <- glm(
+  pathogenic ~ degree + betweenness,
+  data = df_model,
+  family = binomial
+)
+
+# Model 3 (degree only)
+
+model_3 <- glm(
+  pathogenic ~ degree,
+  data = df_model,
+  family = binomial
+)
+
+# Model 4 (region only)
+
+model_4 <- glm(
+  pathogenic ~ region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 5 (betweenness only)
+
+model_5 <- glm(
+  pathogenic ~ betweenness,
+  data = df_model,
+  family = binomial
+)
+
+AIC(
+  model_1,
+  model_2,
+  model_3,
+  model_4,
+  model_5
+)
+
+#Wilcoxon test (do pathogenic residues have a different degree than non-pathogenic residues)
+
+wilcox.test(degree ~ pathogenic, data = df_model)
+# pathogenic and non pathogenic residues have statistically different degrees. makes sense
+
+# Residue contact degree is the strongest predictor of
+# pathogenic mutation occurrence among the tested structural features.
+```
+
+
+# Results
+
+Figure 1: Distribution of Variant Types
+
+Clinvar data was segmented into variant type and the associated pathogenicty.
+
+Figure 2: Pathogenic PRNP mutations by residue
+
+Each bar represents a count of a pathogenic mutation and the position in the PRNP protein. 
+
+Figure 3: Distance Map
+
+The distance map is a visual representation of the distance matrix - pairwise distances between an i_th_ and j_th_ residue in the protein. Blue regions indicate areas where residues are not clustered, whereas red indicates higher density areas of the protein's structure.
+
+Figure 4: Contact Network
+
+The contact network is made by comparing residues and their neighbors. The residues that are in highly dense areas are marked in red, formed by breaching a cutoff point.
+
+Figure 5: Permutation test
+
+Each count on the histogram represents the distribution of mean distances between random residues and functional residues over 10,000 randomized trials. The line in red is the observed value of mean distance for high-centrality residues.
+
+Figure 6: amino acid frequency comparison
+
+
+Pathogenic residues were composed of a subset of amino acids. Nearly all the pathogenic mutations where considered functional, and about half were of high centrality in the protein.
+
+Figure 7: Enrichment of pathogenic mutations by structural region
+
+From literature the structural regions of the protein are given with specific residue numbers. Residue 144 through residue 154 is Helix 1; residue 165 through residue 172 is the β2–α2 loop; residue 173 through residue 194 is Helix 2; residue 200 through residue 228 is Helix 3. Blue accounts for what proportion of 230 mutations are pathogenic, with region of PRNP on the x axis.
+
+Figure 8: Three dimensional mapping of pathogenic mutations
+
+The mutations were mapped onto the 1QLX PRNP structure for comparison using ChimeraX.^14^
+
+Figure 9: AIC and Wilcoxon test results
+
+The AIC tests compared 5 different models, with the binary output being pathogenicity and the predictors being centrality, region, and betweeness.
+
+# Discussion
+ PRNP mutation variants from Clinvar showcase a predominance in the Single Nucleotide Variant section (figure 1), with the majority of pathogenic mutations being from that category. There were a several pathogenic mutations in the haplotype, inversion, and microsatellite category as well. Based on residue position, the pathogenic variants accumulated most highly around residues 100-150 and 175-230, with a few pathogenic mutations occurring in the beginning portion of the protein (figure 2). 
+ 
+The distance map (figure 3) shows regions of residues being close together in 3D space (blue). These residues experience interactions with one another,
+typically corresponding to secondary structure packing, with red residues being signficant distances and likely no interactions between a pair of residues. The contact network (figure 4) provides narrows it down to residues that are of greatest influence to the overall structure.^15^ These residues are: ILE139, VAL161, CYS170, THR183, ILE184, MET205, MET206, VAL210, GLU211. These residues are likely responsible for function, and the expectation is that if mutated PRNP may experience misfolding leading to pathogenicity.^12^
+
+High-centrality residues were shown to be unusually close to functional sites^12^. The test providing a p value less than .05 which indicates residues are closer than expected by chance and suggests real biological clustering^11,15^.
+
+The key structural regions of PRNP with highest enrichment in pathogenic mutations (in order) was Helix 2, Helix 3, and Helix 1 (figure 7) with over half of detected mutations in Helix 2 resulting in pathogenicity of PRNP. This matches the expectation with literature as Helix 2 is one of the "problem" regions for the protein that is highly susceptible to becoming diseased if a mutation occurs there.^8,12^
+
+The AIC results indicate that degree alone predicts pathogenicity better than the other predictors in combination (or on their own). Residues with more connections in a local region are likely to be associated with pathogenic mutations. Intuitively, this makes sense as a residue that is largely in isolation will likely have less of an overall affect on the entire way in which a protein may fold.^7
+
+Lastly the Wilcoxon rank sum test indicates pathogenic and non pathogenic residues have statistically different degrees. 
+
+# Conclusion
+
+This study demonstrates that structural features of PRNP are strongly associated with the occurrence of pathogenic mutations. Residue contact degree emerged as the strongest predictor of pathogenicity, indicating that local structural connectivity plays a key role in protein stability and disease. 
+
+High-centrality residues were also found to cluster significantly near functional regions, supporting a link between network topology and biological function. Pathogenic mutations were enriched in key structural regions such as Helix 2 and Helix 3, consistent with their known roles in prion misfolding. 
+
+This project was overall successful in identifying pathogenicity from structure alone, and with further research on the most problematic mutations, ideally lead to therapeutic solutions to prion disease such as CJD. Perhaps fortunately the occurrence of CJD is a rare thing, but it also makes it a challenge to obtain experimental data on for further analysis. Ideally clinicians and scientists will be able to collaborate further to devise proper solutions to handling prion disease and developing a targeted therapy to address the many types of mutations that lead to disease. 
