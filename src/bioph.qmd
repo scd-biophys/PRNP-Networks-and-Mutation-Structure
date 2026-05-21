@@ -1,0 +1,974 @@
+---
+title: Network Analysis of Structural Determinants of Pathogenic Mutations in PRNP
+date: 5/12/2026
+date-format: long
+author:
+  - name: Samuel C. Durbin
+    url: https://example.com
+    affiliations:
+      - id: California State Univeristy, Los Angeles
+        name: California State University, Los Angeles, Department of Biological Sciences
+    email: sdurbin@calstatela.edu
+format:
+  html:
+    embed-resources: true
+colorlinks: true
+link-citations: true
+keep-tex: true
+abstract: |
+  Prion diseases such as Creutzfeldt–Jakob disease arise from misfolding of the prion protein (PRNP), yet the aspects influences confromational changes in PRNP are not completely understood. In this research a residue interaction network was built from the PRNP crytal structure (1QLX) to quantify structural features including residue contact degree and betweenness centrality. ClinVar mutation data was mapped onto the structure to determine relationships between network properties and mutation pathogenicity. Logistic regression and model comparison using Akaike Information Criterion (AIC) revealed that residue degree is the strongest predictor of pathogenicity among several topological features. High-centrality residues were found to cluster near known functional regions (p = 0.0122), suggesting a link between network topology and biological function. Pathogenic mutations were concentrated in key structural regions such as Helix 2 and Helix 3. These results demonstrate that network based structural features can yield valuable insights into PRNP pathogensis and potentially lead to development of therapeutic regimes. 
+sigstatement: |
+   This study shows that key features of protein structure, particularily local connectivity between residues, can predict the likelihood of pathogenic mutations. Understanding the structural determinants of misfolding susceptibility may help guide the development of targeted therapies for prion diseases, and lead to an increased understanding of the mechanistic process of prion formation and aggregation.
+license: CC BY
+keywords:
+  - Research
+  - Cool Stuff
+citation:
+  type: article
+  citation-key: citationKeyNumber
+  status: draft
+bibliography: references.bib
+---
+
+# Introduction
+
+In the early 1900s, Hans Gerhard Creutzfeldt and Alfons Maria Jakob noted patients with a rapidly progressive and fatal neurological disease distinguished by dementia, motor dysfunction such as stiffness and involuntary jerking movements, loss of balance, and, on autopsy, spongy degeneration in the brain tissue.^1,2^ In his 1922 work, Walther Spielmeyer grouped the cases described by Creutzfeldt and Jakob as a single, distinct neurodegenerative disease entity^3^ introducing the designation later known as Creutzfeldt–Jakob disease (CJD). 
+
+The causative agent behind CJD was revealed as a proteinaceous infectious particle (prion) by Stanley Prusiner^4^ in 1982,  with key details on the neurotoxic aggregates provided by Byron Caughey and Peter Lansbury’s research, and mechanistic insights through Mari DeMarco and Valerie Dagget’s work, explaining how prions form toxic accumulations given enough time.^5,6^ 
+
+Misfolded PRNP induces conformational changes in other PRNP neighbors, forming toxic oligomers that accumulate eventually forming large enough clumps to impede brain and nervous system function. This process is irreversible and always leads to death in those diagnosed with the disease.^7^ 
+
+PRNP has a multitude of genetic variants that can lead to disease in patient populations.^8^ This paper aims to investigate the structural features of pathogenic genetic PRNP variants using statistical analysis of clinical and structural data to identify key regions of instability that, when mutated, lead to protein misfolding and disease. Additionally this work aims to devise a simple model to predict the pathogenicity of a PRNP mutation based on the residue and its structural characteristics.
+
+# Materials and Methods
+
+The crystal structure 1QLX of PRNP serves as a structural reference of the wild type PRNP.^9^ C$\alpha$ coordinates were extracted and used to compute a pairwise distance matrix. A residue interaction network was constructed by defining edges between residues whose C$\alpha$ atoms were within 8 Å - a commonly used threshold in protein contact and residue interaction network analyses^15^. From this network, structural features were computed such as number of contacts per residue (degree) and betweenness centrality (how frequently a residue lies on the shortest paths between other residues)^11,15^ Network based representations are often used to investigate the relationship between a proteins functionality and its structure^11^
+
+From this network betweeness centrality and degree were calculated for each residue. Degree indicates local connectivity and the "packing" within the protein's structure; betweeness centrality measures the significance of residues in mediating communication across the network; both of these aspects have been associated with functional and structural importance in proteins^11,15^.
+  
+For assessment of diseased PRNP, the ClinVar dataset was utilized. Containing 230 genetic mutations of PRNP, the dataset contained pathogenicity of the mutation, germline classification, variant type, and residue number.^10^ 
+  
+ClinVar variants were mapped onto the 1QLX structure by residue number, allowing for the identification of mutations on a "regional" basis with respect to the proteins overall structure. Residues were accordingly categorized into five structural regions (Helix 1, Helix 2, Helix 3, β2–α2 loop, or other).^12^
+  Logistic regression models were constructed to evaluate the association between structural features and mutation pathogenicity. Multiple models were tested, including combinations of degree, betweenness centrality, and structural region, and compared using Akaike Information Criterion (AIC) to identify the model of best fit. Additionally, a Wilcoxon rank-sum test^13^ was used to compare residue contact degree between pathogenic and non-pathogenic variants, to assess if there is an association between degree and pathogenicity.
+  
+All analyses were performed in R^18^, with structural analysis conducted using the bio3d package and network analysis performed using igraph^21^. Data manipulation and visualization were carried out using dplyr^20^ and ggplot2^19^.
+
+# Results
+
+```{r}
+#| include: false
+#| results: "hide"
+# -----------------------------
+# Load Libraries
+# -----------------------------
+
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(bio3d)
+library(stringr)
+library(igraph)
+library(rgl)
+
+# -----------------------------
+# Load Data
+# -----------------------------
+
+prnp_data <- read_tsv(
+  "clinvar_result.txt",
+  col_types = cols(.default = "c"),
+  na = c("", "NA")
+)
+
+# ------------------------------
+# isolate key columns
+# ------------------------------
+
+df_focus <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  select(
+    `Protein change`,
+    `Molecular consequence`,
+    `Variant type`,
+    `Germline classification`
+  )
+```
+
+```{r, echo=FALSE, "fig-cap"="Distribution of PRNP variant types. Red indicates pathogenic; blue indicates benign."}
+
+df_focus %>%
+  count(`Variant type`, `Germline classification`) %>%
+  ggplot(aes(x = `Variant type`, y = n, fill = `Germline classification`)) +
+  geom_col() +
+  theme_minimal() +
+  scale_fill_manual(values = c(
+    "Pathogenic" = "#d73027",
+    "Likely pathogenic" = "#fc8d59",
+    "Uncertain significance" = "#bdbdbd",
+    "Likely benign" = "#91bfdb",
+    "Benign" = "#4575b4"
+  )) +
+  labs(
+    x = "Variant type",
+    y = "Count",
+    fill = "Germline classification",
+  ) +
+theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+```
+
+Clinvar data was segmented into variant type and the associated pathogenicty (figure 1).
+
+```{r, include=FALSE}
+# ------------------------------
+# Residue level plot
+# ------------------------------
+
+df_residue <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  filter(grepl("Pathogenic|Benign", `Germline classification`, ignore.case = TRUE)) %>%
+  mutate(
+    residue = as.integer(str_extract(`Protein change`, "[0-9]+")),
+    classification = case_when(
+      grepl("Pathogenic", `Germline classification`, ignore.case = TRUE) ~ "Pathogenic",
+      grepl("Benign", `Germline classification`, ignore.case = TRUE) ~ "Benign"
+    )
+  )
+
+df_counts <- df_residue %>%
+  count(residue, classification)
+```
+
+```{r, echo=FALSE, "fig-cap"="Residue-level distribution of pathogenic PRNP mutations."}
+
+ggplot(df_counts, aes(x = residue, y = n, fill = classification)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c(
+    "Pathogenic" = "red",
+    "Benign" = "blue"
+  )) +
+  theme_bw() +
+  labs(
+    x = "Residue position",
+    y = "Number of ClinVar submissions",
+    fill = "Classification"
+  )
+
+
+```
+
+Variants were plotted as counts with respect to their mutated residue's position from the c-terminus of PRNP (figure 2).
+
+```{r, include=FALSE}
+# ------------------------------
+# Load 1QLX structure and build contact network
+# ------------------------------
+
+pdb <- read.cif("1qlx.cif")
+
+ca <- atom.select(pdb, elety = "CA")
+
+coords <- pdb$xyz[ca$xyz]
+coords_matrix <- matrix(coords, ncol = 3, byrow = TRUE)
+
+resno <- pdb$atom$resno[ca$atom]
+resid <- pdb$atom$resid[ca$atom]
+
+dist_matrix <- as.matrix(dist(coords_matrix))
+
+threshold <- 8
+contacts <- dist_matrix < threshold
+diag(contacts) <- FALSE
+
+g <- graph_from_adjacency_matrix(
+  contacts,
+  mode = "undirected",
+  diag = FALSE
+)
+
+# Compute structural network features
+btw <- betweenness(g, normalized = TRUE)
+deg <- degree(g)
+```
+
+```{r, echo=FALSE, "fig-cap"="Distance map of PRNP crystal structure 1QLX. Blue indicates residues close in 3D space, while red indicates residues far apart."}
+heatmap(
+  dist_matrix,
+  Rowv = NA,
+  Colv = NA,
+  col = colorRampPalette(c("blue", "white", "red"))(100),
+  scale = "none",
+  xlab = "Residue Number",
+  ylab = "Residue Number",
+  main = "Figure 3: Distance Map"
+)
+```
+
+Figure 3 is a visualization of the distance matrix which was calculated on each paired residue. Blue indicates regions under 8 Å while red indicates regions over 20 Å.
+
+```{r, include=FALSE}
+
+#Centrality calculations
+
+centrality_df <- data.frame(
+  index = seq_along(btw),
+  resno = resno,
+  resid = resid,
+  betweenness = btw
+)
+
+centrality_df <- centrality_df[order(-centrality_df$betweenness), ]
+
+
+# Top 10% most central residues
+cutoff <- quantile(btw, 0.90)
+
+high_cent <- btw >= cutoff
+
+high_cent_residues <- data.frame(
+  index = which(high_cent),
+  resno = resno[high_cent],
+  resid = resid[high_cent],
+  betweenness = btw[high_cent]
+)
+
+high_cent_residues
+
+V(g)$size <- 4
+V(g)$color <- ifelse(high_cent, "red", "gray")
+
+# Label only high-betweenness residues
+vertex_labels <- ifelse(
+  high_cent,
+  paste0(resid, resno),
+  NA
+)
+```
+
+```{r, echo=FALSE, "fig-cap"="Contact network graph for PRNP residues. Red indicates residues with high-betweeness"}
+#| fig-width: 8
+#| fig-height: 8
+
+plot(
+  g,
+  vertex.label = vertex_labels,
+  vertex.label.cex = 0.7,
+  vertex.label.color = "black",
+  vertex.size = V(g)$size,
+  vertex.color = V(g)$color,
+  edge.color = "gray80",
+)
+
+```
+
+The contact network is made by comparing residues and their neighbors (figure 4). The residues that are in highly dense areas are marked in red - these residues reach the top 10% highest betweeness centrality in the PRNP protein. 
+
+```{r, echo=FALSE, "fig-cap"="Permutation test for residue clustering near functional sites. Red indicates observed results. Each count on the histogram represents one trial"}
+# ------------------------------
+# Permutation test for clustering near functional sites
+# ------------------------------
+
+# pick functional residues
+functional_resno <- c(
+  165:175,                  # β2–α2 loop
+  178, 200, 208, 210, 217,  # disease mutations
+  179, 214                  # disulfide bond
+)
+
+functional_idx <- which(resno %in% functional_resno)
+high_idx <- which(high_cent)
+
+# Minimum distance from each high-centrality residue to functional site
+obs_dist <- apply(dist_matrix[high_idx, functional_idx, drop = FALSE], 1, min)
+obs_mean <- mean(obs_dist)
+
+# Permutation test
+# picking random residues and the result.
+
+set.seed(123)
+
+n_perm <- 10000
+perm_means <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+  # picking random set of residues that is the same size as the high centrality set
+  random_idx <- sample(seq_along(resno), length(high_idx))
+  
+  # for each random residue, find the closest functional residue
+  random_dist <- apply(dist_matrix[random_idx, functional_idx, drop = FALSE], 1, min)
+  
+  # compute average distance for this random set
+  perm_means[i] <- mean(random_dist)
+}
+
+p_value <- mean(perm_means <= obs_mean)
+
+hist(
+  perm_means,
+  breaks = 50,
+  xlab = "Mean Distance to Functional Site",
+  main = ""
+)
+
+abline(v = obs_mean, col = "red", lwd = 3)
+```
+
+Each count on the histogram represents the distribution of mean distances between random residues and functional residues over 10,000 randomized trials. The line in red is the observed value of mean distance for high-centrality residues (figure 5). The p-value was .0122 for this test.
+
+```{r, include=FALSE}
+# ------------------------------
+# Amino acid frequency comparison
+# ------------------------------
+
+# Extract amino acids
+aa_high <- resid[high_cent]
+aa_func <- resid[functional_idx]
+
+# Frequency tables
+freq_high <- table(aa_high)
+freq_func <- table(aa_func)
+
+# data frame conversion
+df_high <- as.data.frame(freq_high)
+colnames(df_high) <- c("AminoAcid", "Count")
+df_high$Region <- "High Centrality"
+
+df_func <- as.data.frame(freq_func)
+colnames(df_func) <- c("AminoAcid", "Count")
+df_func$Region <- "Functional"
+
+# Combining
+df_all <- rbind(df_high, df_func)
+```
+
+```{r, echo=FALSE, "fig-cap"="Amino Acid Frequency Comparison"}
+ggplot(df_all, aes(x = AminoAcid, y = Count, fill = Region)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c(
+    "High Centrality" = "red",
+    "Functional" = "darkgreen"
+  )) +
+  theme_minimal() +
+  labs(
+    x = "Amino Acid",
+    y = "Count"
+  )
+```
+
+A subset of all amino acids are implicated in diseased prion states (figure 6).
+
+```{r, echo=FALSE, "fig-cap"="Structural Regions and Pathogenic PRNP proportionalities"}
+# ------------------------------
+# Make structural table from 1QLX C-alpha atoms
+# ------------------------------
+
+pdb_map <- data.frame(
+  residue = resno,
+  pdb_residue_name = resid,
+  betweenness = btw,
+  degree = deg
+) %>%
+  mutate(region = case_when(
+    residue >= 144 & residue <= 154 ~ "Helix 1",
+    residue >= 165 & residue <= 172 ~ "beta2-alpha2 loop",
+    residue >= 173 & residue <= 194 ~ "Helix 2",
+    residue >= 200 & residue <= 228 ~ "Helix 3",
+    TRUE ~ "Other"
+  ))
+
+# ------------------------------
+# Mapped table for pathogenic ClinVar PRNP protein changes
+# ------------------------------
+
+clinvar_pathogenic_map <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  filter(grepl("Pathogenic", `Germline classification`, ignore.case = TRUE)) %>%
+  mutate(
+    residue = as.numeric(str_extract(`Protein change`, "[0-9]+")),
+    pathogenic = 1
+  )
+
+mapped_mutations <- clinvar_pathogenic_map %>%
+  filter(residue >= 125 & residue <= 228) %>%
+  left_join(pdb_map, by = "residue") %>%
+  arrange(residue) %>%
+  select(
+    `Protein change`,
+    residue,
+    betweenness,
+    degree,
+    region
+  )
+
+# ------------------------------
+# Mapped table for ALL ClinVar PRNP protein changes
+# pathogenic + benign/non-pathogenic
+# ------------------------------
+
+clinvar_all_map <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  mutate(
+    residue = as.numeric(str_extract(`Protein change`, "[0-9]+")),
+    pathogenic = ifelse(
+      grepl("Pathogenic", `Germline classification`, ignore.case = TRUE),
+      1, 0
+    )
+  ) %>%
+  filter(residue >= 125 & residue <= 228)
+
+mapped_all_mutations <- clinvar_all_map %>%
+  left_join(pdb_map, by = "residue") %>%
+  arrange(residue) %>%
+  select(
+    `Protein change`,
+    residue,
+    `Germline classification`,
+    pathogenic,
+    betweenness,
+    degree,
+    region
+  )
+
+# ------------------------------
+# Clean table for Quarto output
+# ------------------------------
+
+mapped_all_mutations %>%
+  filter(pathogenic == 1) %>%
+  select(`Protein change`, residue, betweenness, degree, region) %>%
+  head(30) %>%
+  knitr::kable(
+    caption = "Subset of pathogenic PRNP mutations mapped to structural features.", booktabs = FALSE
+  )
+
+# -------------------------------
+# Pathogenic Mutations by region
+# -------------------------------
+
+ggplot(mapped_all_mutations, aes(x = region, fill = factor(pathogenic))) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(
+    values = c("0" = "blue", "1" = "red"),
+    labels = c("0" = "Non-pathogenic", "1" = "Pathogenic")
+  ) +
+  theme_bw() +
+  labs(
+    x = "Structural region",
+    y = "Proportion",
+    fill = "Classification") +
+theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+Pathogenic mutations account for over 50% of the mutations in Helix 2 and nearly that amount in Helix 3 (figure 7). All the disease causing mutations and their regional characteristics are listed in table 1. 
+
+```{r}
+#| echo: false
+#| fig-cap: "Three dimensional structure of PRNP with diseased mutations colored in red. Visualized via ChimeraX"
+
+knitr::include_graphics("prnp_regions.png")
+```
+
+The pathogenic mutations were mapped to the wild type structure of PRNP for the sake of visualization, strictly by residue number to show regional distribution.
+
+```{r, include=FALSE}
+# ------------------------------
+# GLM section
+# ------------------------------
+
+df_model <- mapped_all_mutations %>%
+  mutate(
+    region = factor(region),
+    region = relevel(region, ref = "Other")
+  )
+
+# Model 1 (Full model)
+
+model_1 <- glm(
+  pathogenic ~ degree + betweenness + region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 2 (no region)
+
+model_2 <- glm(
+  pathogenic ~ degree + betweenness,
+  data = df_model,
+  family = binomial
+)
+
+# Model 3 (degree only)
+
+model_3 <- glm(
+  pathogenic ~ degree,
+  data = df_model,
+  family = binomial
+)
+
+# Model 4 (region only)
+
+model_4 <- glm(
+  pathogenic ~ region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 5 (betweenness only)
+
+model_5 <- glm(
+  pathogenic ~ betweenness,
+  data = df_model,
+  family = binomial
+)
+
+AIC(
+  model_1,
+  model_2,
+  model_3,
+  model_4,
+  model_5
+)
+
+#Wilcoxon test (do pathogenic residues have a different degree than non-pathogenic residues)
+
+wilcox.test(degree ~ pathogenic, data = df_model)
+# pathogenic and non pathogenic residues have statistically different degrees. makes sense
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Comparison of logistic regression models predicting PRNP pathogenicity using Akaike Information Criterion (AIC). Lower AIC indicates better model fit."
+
+aic_table <- data.frame(
+  Model = c(
+    "Degree + Betweenness + Region",
+    "Degree + Betweenness",
+    "Degree only",
+    "Region only",
+    "Betweenness only"
+  ),
+  AIC = c(
+    AIC(model_1),
+    AIC(model_2),
+    AIC(model_3),
+    AIC(model_4),
+    AIC(model_5)
+  )
+)
+
+aic_table %>%
+  arrange(AIC) %>%
+  knitr::kable(align = "c")
+```
+
+The AIC tests compared 5 different models, with the binary output being pathogenicity and the predictors being centrality, region, and betweenes (table 2). A Wilcoxon rank-sum test showed that residues that harbor pathogenic mutationsdiffer significantly in contact degree (p < 0.05) than residues that do not.
+
+# Discussion
+
+PRNP mutation variants from Clinvar showcase a predominance in the Single Nucleotide Variant section (figure 1), with the majority of pathogenic mutations being from that category. There were a several pathogenic mutations in the haplotype, inversion, and microsatellite category as well. Based on residue position, the pathogenic variants accumulated most highly around residues 100-150 and 175-230, with a few pathogenic mutations occurring in the beginning portion of the protein (figure 2). 
+ 
+The distance map (figure 3) shows regions of residues being close together in 3D space (blue). These residues experience interactions with one another,
+typically corresponding to secondary structure packing, with red residues being significant distances and likely no interactions between a pair of residues. The contact network (figure 4) narrows it down to residues that are of greatest influence to the overall structure.^15^ These residues are: ILE139, VAL161, CYS170, THR183, ILE184, MET205, MET206, VAL210, GLU211. These residues are likely responsible for function, and the expectation is that if mutated PRNP may experience misfolding leading to pathogenicity.^12^
+
+High-centrality residues were shown to be unusually close to functional sites^12^. The test providing a p value less than .05 which indicates residues are closer than expected by chance and suggests real biological clustering^11,15^.
+
+The key structural regions of PRNP with highest enrichment in pathogenic mutations (in order) was Helix 2, Helix 3, and Helix 1 (figure 7, figure 8) with over half of detected mutations in Helix 2 resulting in pathogenicity of PRNP. This matches the expectation with literature as Helix 2 is one of the "problem" regions for the protein that is highly susceptible to becoming diseased if a mutation occurs there.^8,12^
+
+The AIC results indicate that degree alone predicts pathogenicity better than the other predictors in combination (or on their own). Residues with more connections in a local region are likely to be associated with pathogenic mutations. Intuitively, this makes sense as a residue that is largely in isolation will likely have less of an overall affect on the entire way in which a protein may fold.^7^
+
+The Wilcoxon rank sum test indicates pathogenic and non pathogenic residues have statistically different degrees.
+
+Lastly, one limitation of this analysis involved only using a single static structure. Proteins are dynamic, not fixed, and there is no diseased PRNP currently crystallized. Secondly, only using C$\alpha$ with an 8 Å cutoff simplifies real biochemical interactions. Thirdly, 230 variants on Clinvar is a signficant count, but ideally the dataset would include thousands of mutations for proper analysis, or a measurement of the frequency with which they occur in populations to better understand what mutations are more likely to induce misfolding than others.
+
+
+# Conclusion
+
+Prion diseases remain incurable and ever present even in wildlife, with rising detections of disease such as Chronic Wasting Disease in Deer in the Midwest United States. The risk of contamination of food-stock will remain until definable treatments are devised, fine-tuned to each species.^16,17^ 
+
+Logically, human treatments will need to come first, and the key is to understand the key details regarding PRNP dysfunction at the molecular level. 
+This study demonstrates that structural features of PRNP are strongly associated with the occurrence of pathogenic mutations. Residue contact degree emerged as the strongest predictor of pathogenicity, indicating that local structural connectivity plays a key role in protein stability and disease.^11^
+
+High-centrality residues were also found to cluster significantly near functional regions, supporting a link between network topology and biological function. Pathogenic mutations were enriched in key structural regions such as Helix 2 and Helix 3, consistent with their known roles in prion misfolding. 
+
+This project was overall successful in identifying pathogenicity from structure alone, and with further research on the most problematic mutations, ideally lead to therapeutic solutions to prion disease such as CJD. Perhaps fortunately the occurrence of CJD is a rare thing, but it also makes it a challenge to obtain experimental data on for further analysis. Ideally clinicians and scientists will be able to collaborate further to devise proper solutions to handling prion disease and developing a targeted therapy to address the many types of mutations that lead to disease. 
+
+# Author Contributions
+
+Samuel Durbin carried out the research.
+
+# Declaration of Interest
+
+The authors declare no competing interests.
+
+# Acknowledgments
+
+We thank G. Ramirez for the assistance with data analysis and methods.
+
+## References
+
+1. Jakob, A. (1921). Über eigenartige Erkrankungen des Zentralnervensystems mit bemerkenswertem anatomischen Befunde. *Zeitschrift für die gesamte Neurologie und Psychiatrie, 64*, 147–228. https://doi.org/10.1007/BF02870932  
+
+2. Creutzfeldt, H. G. (1920). Über eine eigenartige herdförmige Erkrankung des Zentralnervensystems (Vorläufige Mitteilung). *Zeitschrift für die gesamte Neurologie und Psychiatrie, 57*, 1–18. https://doi.org/10.1007/BF02866081  
+
+3. Spielmeyer, W. (1922). Die histopathologische Forschung in der Psychiatrie. *Klinische Wochenschrift, 1*, 1817–1819. https://doi.org/10.1007/BF01716575  
+
+4. Prusiner, S. B. (1982). Novel proteinaceous infectious particles cause scrapie. *Science, 216*(4542), 136–144. https://doi.org/10.1126/science.6801762  
+
+5. Caughey, B., & Lansbury, P. T. (2003). Protofibrils, pores, fibrils, and neurodegeneration: Separating responsible aggregates from bystanders. *Annual Review of Neuroscience, 26*, 267–298. https://doi.org/10.1146/annurev.neuro.26.010302.081142  
+
+6. DeMarco, M. L., & Daggett, V. (2004). From conversion to aggregation: Protofibril formation of the prion protein. *Proceedings of the National Academy of Sciences, 101*(8), 2293–2298. https://doi.org/10.1073/pnas.0307178101  
+
+7. Renner, M., & Melki, R. (2014). Protein aggregation and prionopathies. *Pathologie Biologie, 62*(3), 162–168. https://doi.org/10.1016/j.patbio.2014.01.003  
+
+8. Mastrianni, J. (2010). The genetics of prion diseases. *Genetics in Medicine, 12*, 187–195. https://doi.org/10.1097/GIM.0b013e3181cd7374  
+
+9. Zahn, R., Liu, A., Lührs, T., Riek, R., von Schroetter, C., López García, F., Billeter, M., Calzolai, L., Wider, G., & Wüthrich, K. (2000). NMR solution structure of the human prion protein. *Proceedings of the National Academy of Sciences, 97*(1), 145–150. https://doi.org/10.1073/pnas.97.1.145  
+
+10. National Center for Biotechnology Information (NCBI). (2026). *ClinVar*. \url{https://www.ncbi.nlm.nih.gov/clinvar/}
+
+11. Yehorova, D., Di Geronimo, B., Robinson, M., Kasson, P. M., & Kamerlin, S. C. L. (2024). Using residue interaction networks to understand protein function and evolution and to engineer new proteins. *Current Opinion in Structural Biology, 89*, 102922. https://doi.org/10.1016/j.sbi.2024.102922  
+
+12. Chen, J., & Thirumalai, D. (2013). Helices 2 and 3 are the initiation sites in the PrP(C) → PrP(Sc) transition. *Biochemistry, 52*(2), 310–319. https://doi.org/10.1021/bi3005472  
+
+13. Wilcoxon, F. (1945). Individual comparisons by ranking methods. *Biometrics Bulletin, 1*(6), 80–83. https://doi.org/10.2307/3001968  
+
+14. Meng, E. C., Goddard, T. D., Pettersen, E. F., Couch, G. S., Pearson, Z. J., Morris, J. H., & Ferrin, T. E. (2023). UCSF ChimeraX: Tools for structure building and analysis. *Protein Science, 32*(11), e4792.  
+
+15. Del Conte, A., Camagni, G. F., Clementel, D., Minervini, G., Monzon, A. M., Ferrari, C., Piovesan, D., & Tosatto, S. C. E. (2024). RING 4.0: Faster residue interaction networks with novel interaction types. *Nucleic Acids Research, 52*(W1), W306–W312. https://doi.org/10.1093/nar/gkae337  
+
+16. Bartz, J. C., et al. (2024). Chronic wasting disease: State of the science. *Pathogens, 13*(2), 138. https://doi.org/10.3390/pathogens13020138  
+
+17. Hedlin, P., Taschuk, R., Potter, A., Griebel, P., & Napper, S. (2012). Detection and control of prion diseases in food animals. *ISRN Veterinary Science, 2012*, 254739. https://doi.org/10.5402/2012/254739  
+
+18. R Core Team. (2024). *R: A language and environment for statistical computing*. R Foundation for Statistical Computing. https://www.R-project.org/  
+
+19. Wickham, H. (2016). *ggplot2: Elegant graphics for data analysis*. Springer. https://doi.org/10.1007/978-3-319-24277-4  
+
+20. Wickham, H., François, R., Henry, L., & Müller, K. (2023). *dplyr: A grammar of data manipulation*. https://CRAN.R-project.org/package=dplyr  
+
+21. Wickham, H., Hester, J., & Bryan, J. (2023). *readr: Read rectangular text data*. https://CRAN.R-project.org/package=readr  
+
+\clearpage
+\onecolumn
+
+# Code
+
+```
+# -----------------------------
+# Load Libraries
+# -----------------------------
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(bio3d)
+library(stringr)
+library(igraph)
+library(rgl)
+
+# -----------------------------
+# Load Data
+# -----------------------------
+prnp_data <- read_tsv(
+  "clinvar_result.txt",
+  col_types = cols(.default = "c"),
+  na = c("", "NA")
+)
+
+# -----------------------------
+# Variant type plot
+# -----------------------------
+df_focus <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  select(
+    `Protein change`,
+    `Molecular consequence`,
+    `Variant type`,
+    `Germline classification`
+  )
+
+df_focus %>%
+  count(`Variant type`, `Germline classification`) %>%
+  ggplot(aes(x = `Variant type`, y = n, fill = `Germline classification`)) +
+  geom_col() +
+  theme_minimal() +
+  scale_fill_manual(values = c(
+    "Pathogenic" = "#d73027",
+    "Likely pathogenic" = "#fc8d59",
+    "Uncertain significance" = "#bdbdbd",
+    "Likely benign" = "#91bfdb",
+    "Benign" = "#4575b4"
+  )) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# -----------------------------
+# Residue-level plot
+# -----------------------------
+df_residue <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  filter(!is.na(`Protein change`), `Protein change` != "") %>%
+  filter(grepl("^[A-Z][0-9]+[A-Z]$", `Protein change`)) %>%
+  filter(grepl("missense|nonsense", `Molecular consequence`, ignore.case = TRUE)) %>%
+  filter(grepl("Pathogenic|Benign", `Germline classification`, ignore.case = TRUE)) %>%
+  mutate(
+    residue = as.integer(str_extract(`Protein change`, "[0-9]+")),
+    classification = case_when(
+      grepl("Pathogenic", `Germline classification`, ignore.case = TRUE) ~ "Pathogenic",
+      grepl("Benign", `Germline classification`, ignore.case = TRUE) ~ "Benign"
+    )
+  )
+
+df_counts <- df_residue %>%
+  count(residue, classification)
+
+ggplot(df_counts, aes(x = residue, y = n, fill = classification)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c("Pathogenic" = "red", "Benign" = "blue")) +
+  theme_bw()
+
+# -----------------------------
+# Structure + network
+# -----------------------------
+pdb <- read.cif("1qlx.cif")
+ca <- atom.select(pdb, elety = "CA")
+
+coords <- pdb$xyz[ca$xyz]
+coords_matrix <- matrix(coords, ncol = 3, byrow = TRUE)
+
+resno <- pdb$atom$resno[ca$atom]
+resid <- pdb$atom$resid[ca$atom]
+
+dist_matrix <- as.matrix(dist(coords_matrix))
+
+threshold <- 8
+contacts <- dist_matrix < threshold
+diag(contacts) <- FALSE
+
+g <- graph_from_adjacency_matrix(contacts, mode = "undirected", diag = FALSE)
+
+btw <- betweenness(g, normalized = TRUE)
+deg <- degree(g)
+
+# -----------------------------
+# Distance map
+# -----------------------------
+heatmap(
+  dist_matrix,
+  Rowv = NA,
+  Colv = NA,
+  col = colorRampPalette(c("blue", "white", "red"))(100),
+  scale = "none"
+)
+
+# -----------------------------
+# Centrality + network plot
+# -----------------------------
+cutoff <- quantile(btw, 0.90)
+high_cent <- btw >= cutoff
+
+V(g)$color <- ifelse(high_cent, "red", "gray")
+V(g)$size <- 4
+
+vertex_labels <- ifelse(high_cent, paste0(resid, resno), NA)
+
+plot(
+  g,
+  vertex.label = vertex_labels,
+  vertex.size = V(g)$size,
+  vertex.color = V(g)$color
+)
+
+# -----------------------------
+# Permutation test
+# -----------------------------
+functional_resno <- c(165:175, 178, 200, 208, 210, 217, 179, 214)
+
+functional_idx <- which(resno %in% functional_resno)
+high_idx <- which(high_cent)
+
+obs_dist <- apply(dist_matrix[high_idx, functional_idx, drop = FALSE], 1, min)
+obs_mean <- mean(obs_dist)
+
+set.seed(123)
+n_perm <- 10000
+perm_means <- numeric(n_perm)
+
+for (i in 1:n_perm) {
+  random_idx <- sample(seq_along(resno), length(high_idx))
+  random_dist <- apply(dist_matrix[random_idx, functional_idx, drop = FALSE], 1, min)
+  perm_means[i] <- mean(random_dist)
+}
+
+p_value <- mean(perm_means <= obs_mean)
+
+hist(perm_means, breaks = 50)
+abline(v = obs_mean, col = "red", lwd = 3)
+
+# -----------------------------
+# Amino acid frequency
+# -----------------------------
+aa_high <- resid[high_cent]
+aa_func <- resid[functional_idx]
+
+df_all <- rbind(
+  data.frame(AminoAcid = names(table(aa_high)), Count = as.numeric(table(aa_high)), Region = "High Centrality"),
+  data.frame(AminoAcid = names(table(aa_func)), Count = as.numeric(table(aa_func)), Region = "Functional")
+)
+
+ggplot(df_all, aes(x = AminoAcid, y = Count, fill = Region)) +
+  geom_bar(stat = "identity", position = "dodge")
+
+# -----------------------------
+# Structural mapping
+# -----------------------------
+pdb_map <- data.frame(
+  residue = resno,
+  betweenness = btw,
+  degree = deg
+)
+
+clinvar_all_map <- prnp_data %>%
+  filter(`Gene(s)` == "PRNP") %>%
+  mutate(
+    residue = as.numeric(str_extract(`Protein change`, "[0-9]+")),
+    pathogenic = ifelse(grepl("Pathogenic", `Germline classification`), 1, 0)
+  )
+
+mapped_all_mutations <- clinvar_all_map %>%
+  left_join(pdb_map, by = "residue")
+
+ggplot(mapped_all_mutations, aes(x = factor(pathogenic), y = degree)) +
+  geom_boxplot()
+
+# -----------------------------
+# GLM + AIC
+# -----------------------------
+
+df_model <- mapped_all_mutations %>%
+  mutate(
+    region = factor(region),
+    region = relevel(region, ref = "Other")
+  )
+
+# Model 1: full model
+model_1 <- glm(
+  pathogenic ~ degree + betweenness + region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 2: degree + betweenness
+model_2 <- glm(
+  pathogenic ~ degree + betweenness,
+  data = df_model,
+  family = binomial
+)
+
+# Model 3: degree only
+model_3 <- glm(
+  pathogenic ~ degree,
+  data = df_model,
+  family = binomial
+)
+
+# Model 4: region only
+model_4 <- glm(
+  pathogenic ~ region,
+  data = df_model,
+  family = binomial
+)
+
+# Model 5: betweenness only
+model_5 <- glm(
+  pathogenic ~ betweenness,
+  data = df_model,
+  family = binomial
+)
+
+# AIC comparison table
+aic_table <- data.frame(
+  Model = c(
+    "Degree + Betweenness + Region",
+    "Degree + Betweenness",
+    "Degree only",
+    "Region only",
+    "Betweenness only"
+  ),
+  AIC = c(
+    AIC(model_1),
+    AIC(model_2),
+    AIC(model_3),
+    AIC(model_4),
+    AIC(model_5)
+  )
+)
+
+aic_table <- aic_table %>%
+  arrange(AIC)
+
+print(aic_table)
+
+# -----------------------------
+# Wilcoxon test
+# -----------------------------
+
+wilcox.test(degree ~ pathogenic, data = df_model)
+
+
+```
+\newpage
+
+## AI Disclosure
+
+
+
+
+
+AI was used in this project to assist with data cleaning, troubleshooting Quarto formatting, and table creation.
+
+**1. Quarto Formatting Issues**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** To resolve gaps in paragraph spacing and formatting inconsistencies.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “In my methods section there is a large gap between paragraphs, what might be causing this?”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** Several potential causes were identified, though the specific issue was not solved through these suggestions.  
+
+**2. Figure Troubleshooting**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** Quatro had issues resolving figures.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “When I add Figure 3, Figures 1 and 2 disappear—what might be causing this?”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** Suggested formatting fixes did not resolve the issue. Removing a table from the template worked to correct it however.
+
+**3. Figure Display Formatting**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** To show figures while hiding underlying code for a nice looking / more scientifc report.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “How do I display a figure while hiding the code that produces it?”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** The use of `echo: false` and `include: false` was implemented successfully to control code visibility.  
+
+**4. Table Construction**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** To create clean, readable tables for PRNP mutation data.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** Code was improved and additional functions were incorporated to generate well-formatted tables.  
+
+**5. Reference Formatting**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** Reference organization.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “Clean up my references and order them appropriately.”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** References were standardized for a biophysical journal.  
+
+**6. Inclusion of Benign Variants**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** Include benign residues in Figure 2 alongside pathogenic ones.  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “Using this code, add benign residues to the figure.”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** Code was modified to include benign variants, displayed in blue.  
+
+**7. Code Compilation**  
+&nbsp;&nbsp;&nbsp;&nbsp;**Rationale:** To consolidate code from multiple chunks into a single block for report guidelines  
+&nbsp;&nbsp;&nbsp;&nbsp;**Prompt:** “Turn my code into one complete block.”  
+&nbsp;&nbsp;&nbsp;&nbsp;**Outcome:** Code was successfully compiled into a single, continuous block for reuseability.  
+
